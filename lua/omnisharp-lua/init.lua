@@ -5,6 +5,8 @@ local conf = require("telescope.config").values
 local actions = require "telescope.actions"
 local action_state = require "telescope.actions.state"
 local previewers = require "telescope.previewers"
+local entry_display = require("telescope.pickers.entry_display")
+local strings = require "plenary.strings"
 local Job = require('plenary.job')
 
 local M = {}
@@ -59,15 +61,12 @@ local on_output = function(err, data)
 			if messageType == "log" then
 				if string.sub(json.Body.Message, 0, string.len("Queue project update")) == "Queue project update" then
 					M._state.NumberOfProjects = M._state.NumberOfProjects + 1
+				elseif string.sub(json.Body.Message, 0, string.len("Successfully loaded project file")) == "Successfully loaded project file" then
+					M._state.NumberOfProjectsLoaded = M._state.NumberOfProjectsLoaded + 1
+					if M._state.NumberOfProjectsLoaded == M._state.NumberOfProjects then
+						M._state.SolutionLoadingState = "done"
+					end
 				end
-			elseif messageType == 'started' then
-			elseif messageType == 'ProjectConfiguration' then
-			elseif messageType == 'ProjectAdded' then
-				M._state.NumberOfProjectsLoaded = M._state.NumberOfProjectsLoaded + 1
-				if M._state.NumberOfProjectsLoaded == M._state.NumberOfProjects then
-					M._state.SolutionLoadingState = "done"
-				end
-			else
 			end
 		elseif mType == 'response' then
 			local commandState = M._state.OmniSharpRequests[json.Request_seq]
@@ -84,9 +83,6 @@ local on_output = function(err, data)
 				commandState.Status = 'Failed'
 			end
 		end
-	else
-		-- print('Non json data')
-		-- print(data)
 	end
 end
 
@@ -96,7 +92,8 @@ M.StartOmnisharp = function (solutionPath)
 		M._state.SolutionName = vim.fn.expand('%:p:t')
 	end
 	local job = Job:new({
-		command = 'C:\\src\\omnisharp-clean\\bin\\Debug\\OmniSharp.Stdio.Driver\\net472\\OmniSharp.exe',
+		command = 'H:\\st\\omnisharp\\OmniSharp.exe',
+		-- command = 'C:\\src\\omnisharp-clean\\bin\\Debug\\OmniSharp.Stdio.Driver\\net472\\OmniSharp.exe',
 		args = { '--plugin', 'c:\\src\\OmnisharpExtensions\\TryOmnisharpExtension.dll', '-s',  solutionPath },
 		cwd = '.',
 		on_stdout = on_output,
@@ -108,16 +105,6 @@ M.StartOmnisharp = function (solutionPath)
 	job:start()
 
 	M._state["job"] = job
-end
-
-M.SendProjectsRequest = function()
-	local request = {
-		Command = '/projects',
-		Seq = M._state.NextSequence,
-		Arguments = nil,
-	}
-	M._sendStdIoRequest(request)
-	return M
 end
 
 M._sendStdIoRequest = function(request, callback, callbackData)
@@ -162,7 +149,6 @@ M.StartGetAllTypes = function()
 end
 
 M.HandleGetAllTypes = function(response)
-	print(vim.inspect(response))
 	M._openTelescope(response.Body.Implementations)
 end
 
@@ -174,12 +160,17 @@ M.StartFindUsages = function()
 	M._decompileRequest("/decompilefindusages", M.HandleFindImplementations)
 end
 
-M.StartGetDecompiledSource = function(assemblyFilePath, containingTypeFullName, callbackData)
+M.StartGetDecompiledSource = function(assemblyFilePath, containingTypeFullName, usageType, namespaceName, typeName, baseTypeName, methodName, callbackData)
 	local request = {
 		Command = "/decompiledsource",
 		Arguments = {
 			AssemblyFilePath = assemblyFilePath,
 			ContainingTypeFullName = containingTypeFullName,
+			UsageType = usageType,
+			NamespaceName = namespaceName,
+			TypeName = typeName,
+			BaseTypeName = baseTypeName,
+			MethodName = methodName
 		},
 		Seq = M._state.NextSequence,
 	}
@@ -192,6 +183,7 @@ M.StartFindImplementations = function()
 end
 
 M.HandleFindImplementations = function(response)
+	print(vim.inspect(response))
 	M._openTelescope(response.Body.Implementations)
 end
 
@@ -231,8 +223,11 @@ M.HandleDecompileGotoDefinitionResponse = function(response)
 end
 
 M.HandleDecompiledSource = function(response, data)
+	print(vim.inspect(response))
 	local body = response.Body
 	local fileText = body.SourceText
+	local line = body.Line
+	local column = body.Column
 	local bufnr = data.BufferNumber
 	local winid = data.WindowId
 
@@ -245,75 +240,109 @@ M.HandleDecompiledSource = function(response, data)
 		vim.list_extend(lines, vim.split(fileText, "\r\n"))
 		vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, lines)
 		vim.api.nvim_win_set_buf(winid, bufnr)
-		vim.api.nvim_win_set_cursor(winid, { data.Entry.Line, data.Entry.Column })
+		vim.api.nvim_win_set_cursor(winid, { line, column })
 		vim.api.nvim_buf_set_option(bufnr, "syntax", "cs")
 		vim.api.nvim_buf_set_option(bufnr, "buftype", "nofile")
 		vim.api.nvim_buf_set_option(bufnr, "buflisted", true)
-		vim.api.nvim_buf_add_highlight(bufnr, -1, "TelescopePreviewLine", data.Entry.Line -1, 0, -1)
+		vim.api.nvim_buf_add_highlight(bufnr, -1, "TelescopePreviewLine", line -1, 0, -1)
 		vim.b.IsDecompiled = body.IsDecompiled
 		vim.b.AssemblyFilePath = body.AssemblyFilePath
 		vim.b.ContainingTypeFullName = body.ContainingTypeFullName
 	end))
 end
 
-M._openTelescope2 = function(data)
-	opts = opts or {}
-	local timer = vim.loop.new_timer()
-	timer:start(1000, 0, vim.schedule_wrap(function()
-	pickers.new(opts, {
-		layout_strategy='vertical',
-    layout_config = {
-      width = 0.95,
-			height = 0.95
-    },
-		prompt_title = "find implementations",
-		finder = finders.new_table {
-			results = data,
-			entry_maker = function(entry)
-				return {
-					value = entry,
-					display = entry,
-					ordinal = entry,
-				}
-			end
-		},
-		preview = opts.previewer,
-		attach_mappings = function(prompt_bufnr, map)
-			actions.select_default:replace(function()
-			end)
-			return true
-		end,
-		previewer = previewers.new_buffer_previewer {
-			get_buffer_by_name = function(_, entry)
-				return entry.value
-			end,
-			define_preview = function(self, entry)
-			end
-		},
-		sorter = conf.generic_sorter(opts),
-	}):find()
-	end))
+M._blankIfNil = function(val)
+	local result = ''
+	if val ~= nil then
+		return val
+	end
+	return ''
 end
 
 M._openTelescope = function(data)
+	local widths = {
+		TypeFullName = 0,
+		NamespaceName = 0,
+		AssemblyName = 0,
+		DotNetVersion = 0,
+		AssemblyVersion = 0,
+		Line = 0,
+		Column = 0,
+		FileName = 0
+	}
+
+	local parse_line = function(entry)
+		for key, value in pairs(widths) do
+			widths[key] = math.max(value, strings.strdisplaywidth(entry[key] or ""))
+		end
+	end
+
+	for _, line in ipairs(data) do
+		parse_line(line)
+	end
+
 	opts = opts or {}
 	local timer = vim.loop.new_timer()
 	timer:start(1000, 0, vim.schedule_wrap(function()
 	pickers.new(opts, {
 		layout_strategy='vertical',
-    layout_config = {
-      width = 0.95,
+		layout_config = {
+			width = 0.95,
 			height = 0.95
-    },
+		},
 		prompt_title = "find implementations",
 		finder = finders.new_table {
 			results = data,
 			entry_maker = function(entry)
-				return {
-					value = entry,
-					display = entry.SourceText,
-					ordinal = entry.SourceText,
-				}
+				if entry.Type == 0 then
+					local displayer = entry_display.create {
+						separator = "  ",
+						items = {
+							{ width = widths.TypeFullName },
+							{ width = widths.NamespaceName },
+							{ width = widths.AssemblyName + widths.AssemblyVersion + 1 },
+							{ width = widths.DotNetVersion + 6 },
+							{ remaining = true },
+						},
+					}
+
+					local make_display = function(entry)
+						return displayer {
+							{ M._blankIfNil(entry.value.TypeFullName), "TelescopeResultsClass" },
+							{ M._blankIfNil(entry.value.NamespaceName), "TelescopeResultsIdentifier" },
+							{ string.format("%s %s", entry.value.AssemblyName, entry.value.AssemblyVersion), "TelescopeResultsIdentifier" },
+							{ string.format("%s %s", '.net ', entry.value.DotNetVersion), "TelescopeResultsIdentifier" },
+							{ M._blankIfNil(entry.value.AssemblyFilePath), "TelescopeResultsIdentifier" }
+						}
+					end
+					return {
+						value = entry,
+						display = make_display,
+						ordinal = entry.TypeFullName,
+					}
+				else
+					local displayer = entry_display.create {
+						separator = "  ",
+						items = {
+							{ width = widths.TypeFullName },
+							{ width = widths.NamespaceName },
+							{ remaining = true },
+						},
+					}
+
+					local make_display = function(entry)
+						return displayer {
+							{ M._blankIfNil(entry.value.TypeFullName), "TelescopeResultsClass" },
+							{ M._blankIfNil(entry.value.NamespaceName), "TelescopeResultsIdentifier" },
+							{ string.format("%s:%s:%s", entry.value.FileName, entry.value.Line, entry.value.Column), "TelescopeResultsIdentifier" }
+						}
+					end
+					return {
+						value = entry,
+						display = make_display,
+						ordinal = string.format("%s %s", entry.NamespaceName, entry.TypeFullName),
+					}
+				end
 			end
 		},
 		preview = opts.previewer,
@@ -327,7 +356,7 @@ M._openTelescope = function(data)
 					vim.api.nvim_win_set_cursor(0, { selection.value.Line, selection.value.Column })
 				else
 					actions.close(prompt_bufnr)
-					M.StartGetDecompiledSource(selection.value.AssemblyFilePath, selection.value.ContainingTypeFullName, { Entry = selection.value, BufferNumber = 0, WindowId = 0, })
+					M.StartGetDecompiledSource(selection.value.AssemblyFilePath, selection.value.ContainingTypeFullName, selection.value.UsageType, selection.value.NamespaceName, selection.value.TypeName, selection.value.BaseTypeName, selection.value.MethodName, { Entry = selection.value, BufferNumber = 0, WindowId = 0, })
 				end
 			end)
 			return true
@@ -358,7 +387,7 @@ M._openTelescope = function(data)
 				else
 					local bufnr = self.state.bufnr
 					local winid = self.state.winid
-					M.StartGetDecompiledSource(entry.value.AssemblyFilePath, entry.value.ContainingTypeFullName, { Entry = entry.value, BufferNumber = bufnr, WindowId = winid, })
+					M.StartGetDecompiledSource(entry.value.AssemblyFilePath, entry.value.ContainingTypeFullName, entry.value.UsageType, entry.value.NamespaceName, entry.value.TypeName, entry.value.BaseTypeName, entry.value.MethodName, { Entry = entry.value, BufferNumber = bufnr, WindowId = winid, })
 					vim.api.nvim_buf_set_option(self.state.bufnr, "syntax", "cs")
 					vim.api.nvim_buf_set_lines(self.state.bufnr, 0, -1, false, { 'Decompiling ' .. entry.value.SourceText .. '...'})
 				end
