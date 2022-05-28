@@ -313,28 +313,43 @@ M._createFindImplementationsDisplayer = function(entry, widths)
 end
 
 M._createUsagesDisplayer = function(entry, widths)
-	local displayer = entry_display.create {
-		separator = "  ",
-		items = {
-			{ width = widths.SourceText },
-			{ width = widths.TypeFullName+ widths.Line + widths.Column + 2 },
-			-- { width = widths.AssemblyName + widths.AssemblyVersion + 1 },
-			-- { width = widths.DotNetVersion + 6 },
-			{ remaining = true },
-		},
-	}
-
-	local make_display = function(entry)
-		return displayer {
-			{ M._blankIfNil(entry.value.SourceText), "TelescopeResultsClass" },
-			{ string.format("%s:%s:%s", entry.value.TypeFullName, entry.value.Line, entry.value.Column), "TelescopeResultsClass" },
-			-- { string.format("%s %s", entry.value.AssemblyName, entry.value.AssemblyVersion), "TelescopeResultsIdentifier" },
-			-- { string.format("%s %s", '.net ', entry.value.DotNetVersion), "TelescopeResultsIdentifier" },
-			{ M._blankIfNil(entry.value.AssemblyFilePath), "TelescopeResultsIdentifier" }
+	if entry.Type == 1 then
+		local displayer = entry_display.create {
+			separator = "  ",
+			items = {
+				{ width = widths.SourceText },
+				{ width = widths.FileName + widths.Line + widths.Column + 2 },
+				{ remaining = true },
+			},
 		}
-	end
 
-	return make_display
+		local make_display = function(entry)
+			return displayer {
+				{ M._blankIfNil(entry.value.SourceText), "TelescopeResultsClass" },
+				{ string.format("%s:%s:%s", entry.value.FileName, entry.value.Line, entry.value.Column), "TelescopeResultsClass" },
+				{ M._blankIfNil(entry.value.AssemblyFilePath), "TelescopeResultsIdentifier" }
+			}
+		end
+
+		return make_display
+	else
+		local displayer = entry_display.create {
+			separator = "  ",
+			items = {
+				{ width = widths.SourceText },
+				{ remaining = true },
+			},
+		}
+
+		local make_display = function(entry)
+			return displayer {
+				{ M._blankIfNil(entry.value.SourceText), "TelescopeResultsClass" },
+				{ string.format("%s:%s:%s", entry.value.AssemblyFilePath, entry.value.Line, entry.value.Column), "TelescopeResultsClass" },
+			}
+		end
+
+		return make_display
+	end
 end
 
 M._openTelescope = function(data, displayFunc)
