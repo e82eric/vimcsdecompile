@@ -16,6 +16,7 @@ M._state = {
 	OmniSharpRequests = {},
 	SolutionLoaded = false,
 	NumberOfProjects = 0,
+	NumberOfFailedProjects = 0,
 	NumberOfProjectsLoaded = 0,
 	SolutionName = '',
 	NextSequence = 1001,
@@ -37,6 +38,9 @@ end
 M.GetSolutionLoadingStatus = function()
 	local statusString = ''
 	local numberOfProjectsString = '(' ..  M._state.NumberOfProjectsLoaded .. ' of ' .. M._state.NumberOfProjects .. ')'
+	if M._state.NumberOfFailedProjects ~= 0 then
+		numberOfProjectsString = numberOfProjectsString .. ' (' .. M._state.NumberOfFailedProjects .. ' failed)'
+	end
 	if M._state.SolutionLoadingState == nil then
 		statusString = "Not running"
 	elseif M._state.SolutionLoadingState == "loading" then
@@ -63,9 +67,11 @@ local on_output = function(err, data)
 					M._state.NumberOfProjects = M._state.NumberOfProjects + 1
 				elseif string.sub(json.Body.Message, 0, string.len("Successfully loaded project file")) == "Successfully loaded project file" then
 					M._state.NumberOfProjectsLoaded = M._state.NumberOfProjectsLoaded + 1
-					if M._state.NumberOfProjectsLoaded == M._state.NumberOfProjects then
-						M._state.SolutionLoadingState = "done"
-					end
+				elseif string.sub(json.Body.Message, 0, string.len("^Failed to load project")) == "^Failed to load project" then
+					M._state.NumberOfFailedProjects = M._state.NumberOfFailedProjects + 1
+				end
+				if M._state.NumberOfProjectsLoaded + M._state.NumberOfFailedProjects == M._state.NumberOfProjects then
+					M._state.SolutionLoadingState = "done"
 				end
 			end
 		elseif mType == 'response' then
@@ -120,6 +126,7 @@ M._sendStdIoRequest = function(request, callback, callbackData)
 	M._state.job.stdin:write(requestJson)
 	M._state.CommandStartTime = os.time()
 	M._state.EndTime = nil
+	M._state.CurrentSeq = nextSequence
 end
 
 M._decompileRequest = function(url, callback, callbackData)
@@ -127,6 +134,7 @@ M._decompileRequest = function(url, callback, callbackData)
 	local line = cursorPos[1]
 	local column = cursorPos[2] + 1
 	local decompiled = vim.b.IsDecompiled == true
+	local IsFromExternalAssembly = vim.b.IsFromExternalAssembly == true
 	local assemblyFilePath = vim.b.AssemblyFilePath
 	local fileName = vim.fn.expand('%:p')
 
@@ -142,6 +150,35 @@ M._decompileRequest = function(url, callback, callbackData)
 		},
 	}
 	M._sendStdIoRequest(request, callback, callbackData)
+end
+
+M.StartAddExternalDirectory = function(directoryFilePath)
+	local request = {
+		Command = "/addexternalassemblydirectory",
+		Arguments = {
+			DirectoryFilePath = directoryFilePath
+		}
+	}
+	M._sendStdIoRequest(request, M.HandleAddExternalDirectory);
+end
+
+M.HandleAddExternalDirectory = function(response)
+	print(vim.inspect(response))
+end
+
+M.StartSearchExternalAssembliesForType = function(typeName)
+	local request = {
+		Command = "/searchexternalassembliesfortype",
+		Arguments = {
+			TypeName = typeName
+		}
+	}
+	M._sendStdIoRequest(request, M.HandleSearchExternalAssembliesForType);
+end
+
+M.HandleSearchExternalAssembliesForType = function(response)
+	print(vim.inspect(response))
+	M._openTelescope(response.Body.FoundTypes, M._createSearchTypesDisplayer)
 end
 
 M.StartGetAllTypes = function()
@@ -165,9 +202,19 @@ M.HandleUsages = function(response)
 	M._openTelescope(response.Body.Implementations, M._createUsagesDisplayer)
 end
 
-M.StartGetDecompiledSource = function(assemblyFilePath, containingTypeFullName, usageType, namespaceName, typeName, baseTypeName, methodName, line, column, callbackData)
-	print(line)
-	print(column)
+M.StartGetDecompiledSource = function(
+	assemblyFilePath,
+	containingTypeFullName,
+	usageType,
+	namespaceName,
+	typeName,
+	baseTypeName,
+	methodName,
+	line,
+	column,
+	IsFromExternalAssembly,
+	callbackData)
+
 	local request = {
 		Command = "/decompiledsource",
 		Arguments = {
@@ -179,7 +226,8 @@ M.StartGetDecompiledSource = function(assemblyFilePath, containingTypeFullName, 
 			BaseTypeName = baseTypeName,
 			MethodName = methodName,
 			Line = line,
-			Column = column
+			Column = column,
+			IsFromExternalAssembly = IsFromExternalAssembly
 		},
 		Seq = M._state.NextSequence,
 	}
@@ -241,22 +289,25 @@ M.HandleDecompiledSource = function(response, data)
 	local winid = data.WindowId
 
 	local timer = vim.loop.new_timer()
-	timer:start(1000, 0, vim.schedule_wrap(function()
-		if bufnr == 0 then
-			bufnr = vim.uri_to_bufnr("c:\\TEMP\\DECOMPILED_" .. data.Entry.ContainingTypeFullName)
+	timer:start(100, 0, vim.schedule_wrap(function()
+		if response.Request_seq == M._state.CurrentSeq then
+			if bufnr == 0 then
+				bufnr = vim.uri_to_bufnr("c:\\TEMP\\DECOMPILED_" .. data.Entry.ContainingTypeFullName)
+			end
+			local lines = {}
+			vim.list_extend(lines, vim.split(fileText, "\r\n"))
+			vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, lines)
+			vim.api.nvim_win_set_buf(winid, bufnr)
+			vim.api.nvim_win_set_cursor(winid, { line, column })
+			vim.api.nvim_buf_set_option(bufnr, "syntax", "cs")
+			vim.api.nvim_buf_set_option(bufnr, "buftype", "nofile")
+			vim.api.nvim_buf_set_option(bufnr, "buflisted", true)
+			vim.api.nvim_buf_add_highlight(bufnr, -1, "TelescopePreviewLine", line -1, 0, -1)
+			vim.b.IsDecompiled = body.IsDecompiled
+			vim.b.IsFromExternalAssembly = body.IsFromExternalAssembly
+			vim.b.AssemblyFilePath = body.AssemblyFilePath
+			vim.b.ContainingTypeFullName = body.ContainingTypeFullName
 		end
-		local lines = {}
-		vim.list_extend(lines, vim.split(fileText, "\r\n"))
-		vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, lines)
-		vim.api.nvim_win_set_buf(winid, bufnr)
-		vim.api.nvim_win_set_cursor(winid, { line, column })
-		vim.api.nvim_buf_set_option(bufnr, "syntax", "cs")
-		vim.api.nvim_buf_set_option(bufnr, "buftype", "nofile")
-		vim.api.nvim_buf_set_option(bufnr, "buflisted", true)
-		vim.api.nvim_buf_add_highlight(bufnr, -1, "TelescopePreviewLine", line -1, 0, -1)
-		vim.b.IsDecompiled = body.IsDecompiled
-		vim.b.AssemblyFilePath = body.AssemblyFilePath
-		vim.b.ContainingTypeFullName = body.ContainingTypeFullName
 	end))
 end
 
@@ -310,6 +361,27 @@ M._createFindImplementationsDisplayer = function(entry, widths)
 		end
 		return make_display
 	end
+end
+
+M._createSearchTypesDisplayer = function(entry, widths)
+	local displayer = entry_display.create {
+		separator = "  ",
+		items = {
+			{ width = widths.SourceText },
+			{ width = widths.AssemblyFilePath },
+			{ remaining = true },
+		},
+	}
+
+	local make_display = function(entry)
+		return displayer {
+			{ M._blankIfNil(entry.value.SourceText), "TelescopeResultsClass" },
+			{ M._blankIfNil(entry.value.AssemblyName), "TelescopeResultsClass" },
+			{ M._blankIfNil(entry.value.AssemblyFilePath), "TelescopeResultsIdentifier" }
+		}
+	end
+
+	return make_display
 end
 
 M._createUsagesDisplayer = function(entry, widths)
@@ -462,6 +534,7 @@ M._openTelescope = function(data, displayFunc)
 						selection.value.MethodName,
 						selection.value.Line,
 						selection.value.Column,
+						selection.value.IsFromExternalAssembly,
 						{ Entry = selection.value, BufferNumber = 0, WindowId = 0, })
 
 				end
@@ -505,6 +578,7 @@ M._openTelescope = function(data, displayFunc)
 						entry.value.MethodName,
 						entry.value.Line,
 						entry.value.Column,
+						entry.value.IsFromExternalAssembly,
 						{ Entry = entry.value, BufferNumber = bufnr, WindowId = winid, })
 
 					vim.api.nvim_buf_set_option(self.state.bufnr, "syntax", "cs")
