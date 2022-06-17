@@ -355,7 +355,29 @@ M.StartFindImplementations = function()
 end
 
 M.HandleFindImplementations = function(response)
-	M._openTelescope(response.Body.Implementations, M._createUsagesDisplayer)
+	if #response.Body.Implementations == 0 then
+		print 'No implementations found'
+	elseif #response.Body.Implementations == 1 then
+		M._openSourceFileOrDecompile(response.Body.Implementations[1])
+	else
+		M._openTelescope(response.Body.Implementations, M._createUsagesDisplayer)
+	end
+end
+
+M._openSourceFileOrDecompile = function(value)
+	if value.Type == 1 then
+		local bufnr = vim.uri_to_bufnr(value.FileName)
+		vim.api.nvim_win_set_buf(0, bufnr)
+		vim.api.nvim_win_set_cursor(0, { value.Line, value.Column })
+	else
+		M.StartGetDecompiledSource(
+			value.AssemblyFilePath,
+			value.ContainingTypeFullName,
+			value.Line,
+			value.Column,
+			value.IsFromExternalAssembly,
+			{ Entry = value, BufferNumber = 0, WindowId = 0, })
+	end
 end
 
 M.HandleDecompileGotoDefinitionResponse = function(response)
@@ -606,22 +628,8 @@ M._openTelescope = function(data, displayFunc)
 		attach_mappings = function(prompt_bufnr, map)
 			actions.select_default:replace(function()
 				local selection = action_state.get_selected_entry()
-				if selection.value.Type == 1 then
-					actions.close(prompt_bufnr)
-					local bufnr = vim.uri_to_bufnr(selection.value.FileName)
-					vim.api.nvim_win_set_buf(0, bufnr)
-					vim.api.nvim_win_set_cursor(0, { selection.value.Line, selection.value.Column })
-				else
-					actions.close(prompt_bufnr)
-
-					M.StartGetDecompiledSource(
-						selection.value.AssemblyFilePath,
-						selection.value.ContainingTypeFullName,
-						selection.value.Line,
-						selection.value.Column,
-						selection.value.IsFromExternalAssembly,
-						{ Entry = selection.value, BufferNumber = 0, WindowId = 0, })
-				end
+				actions.close(prompt_bufnr)
+				M._openSourceFileOrDecompile(selection.value)
 			end)
 			return true
 		end,
