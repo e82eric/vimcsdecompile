@@ -24,6 +24,10 @@ M._state = {
 	StartSent = false
 }
 
+M.OpenLog = function()
+	log.open()
+end
+
 M.StartDecompiler = function()
 	if M._state.StartSent then
 		print 'Decompiler has already been started'

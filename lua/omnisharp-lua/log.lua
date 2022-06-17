@@ -42,10 +42,16 @@ local log = {}
 
 local unpack = unpack or table.unpack
 
+log.open = function()
+	local vimScriptCommand = 'e ' .. log._outFile
+	vim.cmd(vimScriptCommand)
+end
+
 log.new = function(config, standalone)
   config = vim.tbl_deep_extend("force", default_config, config)
 
   local outfile = string.format('%s/%s.log', vim.api.nvim_call_function('stdpath', {'data'}), config.plugin)
+	log._outFile = outfile
 	print(outfile)
 
   local obj
