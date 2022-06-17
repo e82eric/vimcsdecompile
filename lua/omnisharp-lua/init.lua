@@ -21,7 +21,90 @@ M._state = {
 	NumberOfProjectsLoaded = 0,
 	SolutionName = '',
 	NextSequence = 1001,
+	StartSent = false
 }
+
+M.StartDecompiler = function()
+	if M._state.StartSent then
+		print 'Decompiler has already been started'
+	else
+		local dir = vim.fn.fnamemodify(vim.fn.expand('%'), ':p:h')
+		local slnFiles = {}
+		M._findSolutions(dir, slnFiles)
+		if next(slnFiles) == nil then
+			print('No solution file found')
+		elseif table.getn(slnFiles) == 1 then
+			M.StartOmnisharp(slnFiles[1])
+		else
+			M._openSolutionTelescope(slnFiles, M._createSolutionFileDisplayer)
+		end
+	end
+end
+
+M._findSolutions = function(dir, resultFiles)
+	local slnFiles = vim.fn.split(vim.fn.globpath(dir, '*.sln'), '\n')
+	if next(slnFiles) ~= nil then
+		for k, v in ipairs(slnFiles) do
+			local fullFileName = vim.fn.fnamemodify(v, ':p')
+			table.insert(resultFiles, fullFileName)
+		end
+	else
+		local parentDir = vim.fn.fnamemodify(dir, ':p:h:h')
+		if dir == parentDir then
+			print('Not found, hit root ' .. parentDir)
+		else
+			M._findSolutions(parentDir, resultFiles)
+		end
+	end
+end
+
+M._createSolutionFileDisplayer = function()
+	local resultFunc = function(entry)
+		local displayer = entry_display.create {
+			separator = "  ",
+			items = {
+				{ remaining = true },
+			}
+		}
+
+		local ordinal = entry.value
+		local make_display = function(entry)
+			return displayer {
+				{ entry, "TelescopeResultsIdentifier" },
+			}
+		end
+
+		return {
+			value = entry,
+			display = make_display,
+			ordinal = ordinal
+		}
+	end
+	return resultFunc
+end
+
+M._openSolutionTelescope = function(data)
+	opts = opts or {}
+	local timer = vim.loop.new_timer()
+	timer:start(1000, 0, vim.schedule_wrap(function()
+	pickers.new(opts, {
+		layout_strategy='vertical',
+		prompt_title = "Select Solution File",
+		finder = finders.new_table {
+			results = data,
+		},
+		attach_mappings = function(prompt_bufnr, map)
+			actions.select_default:replace(function()
+				local selection = action_state.get_selected_entry()
+				M.StartOmnisharp(selection.value)
+				actions.close(prompt_bufnr)
+			end)
+			return true
+		end,
+		sorter = conf.generic_sorter(opts),
+	}):find()
+	end))
+end
 
 M.GetCurrentOperationMessage = function()
 	local currentCommand = M._state.CurrentCommand
@@ -68,6 +151,9 @@ local on_output = function(err, data)
 		local mType = json["Type"]
 		if mType == "event" then
 			if messageType == "log" then
+				if json.Body.LogLevel == 'Error' then
+					log.Error(data)
+				end
 				if string.sub(json.Body.Message, 0, string.len("Queue project update")) == "Queue project update" then
 					M._state.NumberOfProjects = M._state.NumberOfProjects + 1
 				elseif string.sub(json.Body.Message, 0, string.len("Successfully loaded project file")) == "Successfully loaded project file" then
@@ -99,6 +185,8 @@ local on_output = function(err, data)
 end
 
 M.StartOmnisharp = function (solutionPath)
+	M._state['StartSent'] = true
+	print('Starting Decompiler ' .. solutionPath)
 	if solutionPath == nil then
 		solutionPath = vim.fn.expand('%:p')
 		M._state.SolutionName = vim.fn.expand('%:p:t')
@@ -224,18 +312,12 @@ M.StartFindUsages = function()
 end
 
 M.HandleUsages = function(response)
-	print(vim.inspect(response))
 	M._openTelescope(response.Body.Implementations, M._createUsagesDisplayer)
 end
 
 M.StartGetDecompiledSource = function(
 	assemblyFilePath,
 	containingTypeFullName,
-	usageType,
-	namespaceName,
-	typeName,
-	baseTypeName,
-	methodName,
 	line,
 	column,
 	IsFromExternalAssembly,
@@ -246,11 +328,6 @@ M.StartGetDecompiledSource = function(
 		Arguments = {
 			AssemblyFilePath = assemblyFilePath,
 			ContainingTypeFullName = containingTypeFullName,
-			UsageType = usageType,
-			NamespaceName = namespaceName,
-			TypeName = typeName,
-			BaseTypeName = baseTypeName,
-			MethodName = methodName,
 			Line = line,
 			Column = column,
 			IsFromExternalAssembly = IsFromExternalAssembly
@@ -261,17 +338,23 @@ M.StartGetDecompiledSource = function(
 	M._sendStdIoRequest(request, M.HandleDecompiledSource, callbackData)
 end
 
+M.StartGetTypeMembers = function()
+	M._decompileRequest('/gettypemembers', M.HandleGetTypeMembers)
+end
+
+M.HandleGetTypeMembers = function(response)
+	M._openTelescope(response.Body.Implementations, M._createUsagesDisplayer)
+end
+
 M.StartFindImplementations = function()
 	M._decompileRequest('/decompilefindimplementations', M.HandleFindImplementations)
 end
 
 M.HandleFindImplementations = function(response)
-	print(vim.inspect(response))
-	M._openTelescope(response.Body.Implementations, M._createFindImplementationsDisplayer)
+	M._openTelescope(response.Body.Implementations, M._createUsagesDisplayer)
 end
 
 M.HandleDecompileGotoDefinitionResponse = function(response)
-	print(vim.inspect(response))
 	local body = response.Body
 	local location = body.Location
 	local fileName = location.FileName
@@ -308,7 +391,6 @@ M.HandleDecompileGotoDefinitionResponse = function(response)
 end
 
 M.HandleDecompiledSource = function(response, data)
-	print(vim.inspect(response))
 	local body = response.Body
 	local fileText = body.SourceText
 	local line = body.Line
@@ -354,7 +436,7 @@ M._createFindImplementationsDisplayer = function(widths)
 			local displayer = entry_display.create {
 				separator = "  ",
 				items = {
-					{ width = widths.TypeFullName },
+					{ width = widths.ContainingTypeFullName },
 					{ width = widths.NamespaceName },
 					{ width = widths.AssemblyName + widths.AssemblyVersion + 1 },
 					{ width = widths.DotNetVersion + 6 },
@@ -364,7 +446,7 @@ M._createFindImplementationsDisplayer = function(widths)
 
 			make_display = function(entry)
 				return displayer {
-					{ M._blankIfNil(entry.value.TypeFullName), "TelescopeResultsClass" },
+					{ M._blankIfNil(entry.value.ContainingTypeFullName), "TelescopeResultsClass" },
 					{ M._blankIfNil(entry.value.NamespaceName), "TelescopeResultsIdentifier" },
 					{ string.format("%s %s", entry.value.AssemblyName, entry.value.AssemblyVersion), "TelescopeResultsIdentifier" },
 					{ string.format("%s %s", '.net ', entry.value.DotNetVersion), "TelescopeResultsIdentifier" },
@@ -375,7 +457,7 @@ M._createFindImplementationsDisplayer = function(widths)
 			local displayer = entry_display.create {
 				separator = "  ",
 				items = {
-					{ width = widths.TypeFullName },
+					{ width = widths.ContainingTypeFullName },
 					{ width = widths.NamespaceName },
 					{ remaining = true },
 				},
@@ -383,7 +465,7 @@ M._createFindImplementationsDisplayer = function(widths)
 
 			make_display = function(entry)
 				return displayer {
-					{ M._blankIfNil(entry.value.TypeFullName), "TelescopeResultsClass" },
+					{ M._blankIfNil(entry.value.ContainingTypeFullName), "TelescopeResultsClass" },
 					{ M._blankIfNil(entry.value.NamespaceName), "TelescopeResultsIdentifier" },
 					{ string.format("%s:%s:%s", entry.value.FileName, entry.value.Line, entry.value.Column), "TelescopeResultsIdentifier" }
 				}
@@ -431,18 +513,21 @@ end
 M._createUsagesDisplayer = function(widths)
 	local resultFunc = function(entry)
 		local make_display = nil
+		local ordinal = nil
 		if entry.Type == 1 then
 			local displayer = entry_display.create {
 				separator = "  ",
 				items = {
-					{ width = 28 },
+					-- { width = math.min(widths.FileName + 3 + widths.Column + widths.Line, 40) },
 					{ remaining = true },
+					{ width = widths.SourceText },
 				}
 			}
 
+			ordinal = M._blankIfNil(entry.FileName) .. M._blankIfNil(entry.SourceText)
 			make_display = function(entry)
 				return displayer {
-					{ M._blankIfNil(entry.value.TypeName), "TelescopeResultsClass" },
+					{ string.format("%s(%s,%s)", entry.value.FileName, entry.value.Line, entry.value.Column), "TelescopeResultsIdentifier" },
 					{ M._blankIfNil(entry.value.SourceText), "TelescopeResultsIdentifier" },
 				}
 			end
@@ -450,16 +535,15 @@ M._createUsagesDisplayer = function(widths)
 			local displayer = entry_display.create {
 				separator = "  ",
 				items = {
-					{ width = widths.UsageType },
-					-- { width = widths.TypeName + 3 + widths.Column + widths.Line },
+					{ width = math.min(2 + widths.ContainingTypeFullName + 3 + widths.Column + widths.Line, 40) },
 					{ remaining = true },
 				},
 			}
 
+			ordinal = M._blankIfNil(entry.ContainingTypeFullName) .. M._blankIfNil(entry.SourceText)
 			make_display = function(entry)
 				return displayer {
-					{ M._blankIfNil(entry.value.UsageType), "TelescopeResultsClass" },
-					-- { string.format("%s:%s:%s", entry.value.TypeName, entry.value.Line, entry.value.Column), "TelescopeResultsClass" },
+					{ string.format("$_%s(%s:%s)", entry.value.ContainingTypeFullName, entry.value.Line, entry.value.Column), "TelescopeResultsClass" },
 					{ M._blankIfNil(entry.value.SourceText), "TelescopeResultsIdentifier" },
 				}
 			end
@@ -468,7 +552,7 @@ M._createUsagesDisplayer = function(widths)
 		return {
 			value = entry,
 			display = make_display,
-			ordinal = M._blankIfNil(entry.UsageType) .. entry.SourceText
+			ordinal = ordinal
 		}
 	end
 	return resultFunc
@@ -476,7 +560,7 @@ end
 
 M._openTelescope = function(data, displayFunc)
 	local widths = {
-		TypeFullName = 0,
+		ContainingTypeFullName = 0,
 		TypeName = 0,
 		NamespaceName = 0,
 		AssemblyName = 0,
@@ -486,7 +570,6 @@ M._openTelescope = function(data, displayFunc)
 		Column = 0,
 		FileName = 0,
 		SourceText = 0,
-		UsageType = 0
 	}
 
 	local parse_line = function(entry)
@@ -530,11 +613,6 @@ M._openTelescope = function(data, displayFunc)
 					M.StartGetDecompiledSource(
 						selection.value.AssemblyFilePath,
 						selection.value.ContainingTypeFullName,
-						selection.value.UsageType,
-						selection.value.NamespaceName,
-						selection.value.TypeName,
-						selection.value.BaseTypeName,
-						selection.value.MethodName,
 						selection.value.Line,
 						selection.value.Column,
 						selection.value.IsFromExternalAssembly,
@@ -573,11 +651,6 @@ M._openTelescope = function(data, displayFunc)
 					M.StartGetDecompiledSource(
 						entry.value.AssemblyFilePath,
 						entry.value.ContainingTypeFullName,
-						entry.value.UsageType,
-						entry.value.NamespaceName,
-						entry.value.TypeName,
-						entry.value.BaseTypeName,
-						entry.value.MethodName,
 						entry.value.Line,
 						entry.value.Column,
 						entry.value.IsFromExternalAssembly,
