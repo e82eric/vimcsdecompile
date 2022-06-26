@@ -20,6 +20,7 @@ M._state = {
 	NumberOfFailedProjects = 0,
 	NumberOfProjectsLoaded = 0,
 	SolutionName = '',
+	AssembliesLoaded = false,
 	NextSequence = 1001,
 	StartSent = false
 }
@@ -132,7 +133,8 @@ M.GetSolutionLoadingStatus = function()
 	if M._state.SolutionLoadingState == nil then
 		statusString = "Not running"
 	elseif M._state.SolutionLoadingState == "loading" then
-		statusString = M._state.SolutionName .. ' loading...' .. numberOfProjectsString
+		-- statusString = M._state.SolutionName .. ' loading...' .. numberOfProjectsString
+		statusString = M._state.SolutionName .. ' loading... ' .. numberOfProjectsString
 	elseif M._state.SolutionLoadingState == "done" then
 		statusString = M._state.SolutionName .. ' ' .. numberOfProjectsString
 	end
@@ -141,6 +143,7 @@ M.GetSolutionLoadingStatus = function()
 end
 
 local on_output = function(err, data)
+	-- print(data)
 	local timer = vim.loop.new_timer()
 	timer:start(100, 0, vim.schedule_wrap(function()
 		log.debug(data)
@@ -152,23 +155,42 @@ local on_output = function(err, data)
 
 	if ok == true then
 		local messageType = json["Event"]
+		if messageType == "SOLUTION_PARSED" then
+			M._state.NumberOfProjects	= json.Body.NumberOfProjects
+			M._state.SolutionName = json.Body.SolutionName
+			print(vim.inspect(json))
+		end
+		if messageType == "PROJECT_LOADED" then
+			M._state.NumberOfProjectsLoaded = M._state.NumberOfProjectsLoaded + 1
+			print(vim.inspect(json))
+		end
+		if messageType == "PROJECT_FAILED" then
+			M._state.NumberOfFailedProjects = M._state.NumberOfFailedProjects + 1
+			print(vim.inspect(json))
+		end
+		if messageType == "ASSEMBLIES_LOADED" then
+			M._state.AssembliesLoaded = true
+			print(vim.inspect(json))
+			if M._state.SolutionLoadingState ~= 'done' and
+				M._state.NumberOfProjects > 0 and
+				M._state.NumberOfProjectsLoaded + M._state.NumberOfFailedProjects == M._state.NumberOfProjects and
+				M._state.AssembliesLoaded == true then
+				M._state.SolutionLoadingState = "done"
+			end
+		end
 		local mType = json["Type"]
 		if mType == "event" then
 			if messageType == "log" then
 				if json.Body.LogLevel == 'Error' then
 					log.Error(data)
 				end
-				if string.sub(json.Body.Message, 0, string.len("Queue project update")) == "Queue project update" then
-					M._state.NumberOfProjects = M._state.NumberOfProjects + 1
-				elseif string.sub(json.Body.Message, 0, string.len("Successfully loaded project file")) == "Successfully loaded project file" then
-					M._state.NumberOfProjectsLoaded = M._state.NumberOfProjectsLoaded + 1
-				elseif string.sub(json.Body.Message, 0, string.len("^Failed to load project")) == "^Failed to load project" then
-					M._state.NumberOfFailedProjects = M._state.NumberOfFailedProjects + 1
-				end
-				if M._state.SolutionLoadingState ~= 'done' and M._state.NumberOfProjects > 0 and M._state.NumberOfProjectsLoaded + M._state.NumberOfFailedProjects == M._state.NumberOfProjects then
-					M.StartLoadAssemblies()
-					M._state.SolutionLoadingState = "done"
-				end
+				-- if string.sub(json.Body.Message, 0, string.len("Queue project update")) == "Queue project update" then
+				-- 	-- M._state.NumberOfProjects = M._state.NumberOfProjects + 1
+				-- elseif string.sub(json.Body.Message, 0, string.len("Successfully loaded project file")) == "Successfully loaded project file" then
+				-- 	-- M._state.NumberOfProjectsLoaded = M._state.NumberOfProjectsLoaded + 1
+				-- elseif string.sub(json.Body.Message, 0, string.len("^Failed to load project")) == "^Failed to load project" then
+				-- 	M._state.NumberOfFailedProjects = M._state.NumberOfFailedProjects + 1
+				-- end
 			end
 		elseif mType == 'response' then
 			local commandState = M._state.OmniSharpRequests[json.Request_seq]
@@ -193,12 +215,14 @@ M.StartOmnisharp = function (solutionPath)
 	print('Starting Decompiler ' .. solutionPath)
 	if solutionPath == nil then
 		solutionPath = vim.fn.expand('%:p')
-		M._state.SolutionName = vim.fn.expand('%:p:t')
+		-- M._state.SolutionName = vim.fn.expand('%:p:t')
 	end
 	local job = Job:new({
-		command = 'H:\\st\\omnisharp\\OmniSharp.exe',
+		-- command = 'H:\\st\\omnisharp\\OmniSharp.exe',
+		command = 'C:\\src\\TryOmnisharpExtension\\StdIoHost\\bin\\Debug\\StdIoHost.exe',
 		-- command = 'C:\\src\\omnisharp-clean\\bin\\Debug\\OmniSharp.Stdio.Driver\\net472\\OmniSharp.exe',
-		args = { '--plugin', 'c:\\src\\OmnisharpExtensions\\TryOmnisharpExtension.dll', '-s',  solutionPath },
+		-- args = { '--plugin', 'c:\\src\\OmnisharpExtensions\\TryOmnisharpExtension.dll', '-s',  solutionPath },
+		args = {  solutionPath },
 		cwd = '.',
 		on_stdout = on_output,
 		on_exit = function(j, return_val)
@@ -358,7 +382,10 @@ M.HandleFindImplementations = function(response)
 	if #response.Body.Implementations == 0 then
 		print 'No implementations found'
 	elseif #response.Body.Implementations == 1 then
-		M._openSourceFileOrDecompile(response.Body.Implementations[1])
+		local timer = vim.loop.new_timer()
+		timer:start(1000, 0, vim.schedule_wrap(function()
+			M._openSourceFileOrDecompile(response.Body.Implementations[1])
+		end))
 	else
 		M._openTelescope(response.Body.Implementations, M._createUsagesDisplayer)
 	end
