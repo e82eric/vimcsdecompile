@@ -332,11 +332,11 @@ M.HandleGetAllTypes = function(response)
 end
 
 M.StartDecompileGotoDefinition = function()
-	M._decompileRequest('/decompilegotodefinition', M.HandleDecompileGotoDefinitionResponse)
+	M._decompileRequest('/gotodefinition', M.HandleDecompileGotoDefinitionResponse)
 end
 
 M.StartFindUsages = function()
-	M._decompileRequest("/decompilefindusages", M.HandleUsages)
+	M._decompileRequest("/findusages", M.HandleUsages)
 end
 
 M.HandleUsages = function(response)
@@ -375,7 +375,7 @@ M.HandleGetTypeMembers = function(response)
 end
 
 M.StartFindImplementations = function()
-	M._decompileRequest('/decompilefindimplementations', M.HandleFindImplementations)
+	M._decompileRequest('/findimplementations', M.HandleFindImplementations)
 end
 
 M.HandleFindImplementations = function(response)
