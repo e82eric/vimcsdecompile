@@ -256,7 +256,6 @@ M._decompileRequest = function(url, callback, callbackData)
 	local line = cursorPos[1]
 	local column = cursorPos[2] + 1
 	local decompiled = vim.b.IsDecompiled == true
-	local IsFromExternalAssembly = vim.b.IsFromExternalAssembly == true
 	local assemblyFilePath = vim.b.AssemblyFilePath
 	local fileName = vim.fn.expand('%:p')
 
@@ -288,19 +287,86 @@ M.HandleAddExternalDirectory = function(response)
 	print(vim.inspect(response))
 end
 
-M.StartSearchExternalAssembliesForType = function(typeName)
+M.StartGetAssemblies = function()
 	local request = {
-		Command = "/searchexternalassembliesfortype",
+		Command = "/getassemblies",
 		Arguments = {
-			TypeName = typeName
+			Load = true,
 		}
 	}
-	M._sendStdIoRequest(request, M.HandleSearchExternalAssembliesForType);
+	M._sendStdIoRequest(request, M.HandleGetAssemblies);
 end
 
-M.HandleSearchExternalAssembliesForType = function(response)
-	print(vim.inspect(response))
-	M._openTelescope(response.Body.FoundTypes, M._createSearchTypesDisplayer)
+M.HandleGetAssemblies = function(response)
+	M._openAssembliesTelescope(response.Body.Assemblies)
+end
+
+M.StartGetAssemblyTypes = function(filePath)
+	local request = {
+		Command = "/getassemblytypes",
+		Arguments = {
+			AssemblyFilePath = filePath,
+		}
+	}
+	M._sendStdIoRequest(request, M.HandleGetAllTypes)
+end
+
+M._openAssembliesTelescope = function(data)
+	local widths = {
+		FullName = 0,
+		TargetFrameworkId = 0,
+	}
+
+	local parse_line = function(entry)
+		for key, value in pairs(widths) do
+			widths[key] = math.max(value, strings.strdisplaywidth(entry[key] or ""))
+		end
+	end
+
+	for _, line in ipairs(data) do
+		parse_line(line)
+	end
+
+	opts = opts or {}
+	local timer = vim.loop.new_timer()
+	timer:start(1000, 0, vim.schedule_wrap(function()
+	pickers.new(opts, {
+		layout_strategy='vertical',
+		prompt_title = "Assemblies",
+		finder = finders.new_table {
+			results = data,
+			entry_maker = function(entry)
+				local displayer = entry_display.create {
+					separator = "  ",
+					items = {
+						{ width = widths.FullName },
+						{ remaining = true },
+					},
+				}
+				local make_display = function(entry)
+					return displayer {
+						{ M._blankIfNil(entry.value.FullName), "TelescopeResultsIdentifier" },
+						{ M._blankIfNil(entry.value.TargetFrameworkId), "TelescopeResultsClass" },
+					}
+				end
+				return {
+					value = entry,
+					display = make_display,
+					ordinal = entry.FullName
+				}
+			end
+		},
+		attach_mappings = function(prompt_bufnr, map)
+			actions.select_default:replace(function()
+				local selection = action_state.get_selected_entry()
+				actions.close(prompt_bufnr)
+				M.StartGetAssemblyTypes(selection.value.FilePath)
+			end)
+			return true
+		end,
+		sorter = conf.generic_sorter(opts),
+	}):find()
+	end))
 end
 
 M.StartGetAllTypes = function(searchString)
@@ -311,20 +377,6 @@ M.StartGetAllTypes = function(searchString)
 		}
 	}
 	M._sendStdIoRequest(request, M.HandleGetAllTypes);
-end
-
-M.StartLoadAssemblies = function()
-	local request = {
-		Command = "/loadassemblies",
-		Arguments = {
-			Load = true,
-		}
-	}
-	M._sendStdIoRequest(request, M.HandleLoadAssemblies);
-end
-
-M.HandleLoadAssemblies = function()
-	print('Assemblies loaded')
 end
 
 M.HandleGetAllTypes = function(response)
@@ -348,7 +400,6 @@ M.StartGetDecompiledSource = function(
 	containingTypeFullName,
 	line,
 	column,
-	IsFromExternalAssembly,
 	callbackData)
 
 	local request = {
@@ -358,7 +409,6 @@ M.StartGetDecompiledSource = function(
 			ContainingTypeFullName = containingTypeFullName,
 			Line = line,
 			Column = column,
-			IsFromExternalAssembly = IsFromExternalAssembly
 		},
 		Seq = M._state.NextSequence,
 	}
@@ -402,7 +452,6 @@ M._openSourceFileOrDecompile = function(value)
 			value.ContainingTypeFullName,
 			value.Line,
 			value.Column,
-			value.IsFromExternalAssembly,
 			{ Entry = value, BufferNumber = 0, WindowId = 0, })
 	end
 end
@@ -467,7 +516,6 @@ M.HandleDecompiledSource = function(response, data)
 			vim.api.nvim_buf_set_option(bufnr, "buflisted", true)
 			vim.api.nvim_buf_add_highlight(bufnr, -1, "TelescopePreviewLine", line -1, 0, -1)
 			vim.b.IsDecompiled = body.IsDecompiled
-			vim.b.IsFromExternalAssembly = body.IsFromExternalAssembly
 			vim.b.AssemblyFilePath = body.AssemblyFilePath
 			vim.b.ContainingTypeFullName = body.ContainingTypeFullName
 		end
@@ -692,7 +740,6 @@ M._openTelescope = function(data, displayFunc)
 						entry.value.ContainingTypeFullName,
 						entry.value.Line,
 						entry.value.Column,
-						entry.value.IsFromExternalAssembly,
 						{ Entry = entry.value, BufferNumber = bufnr, WindowId = winid, })
 
 					vim.api.nvim_buf_set_option(self.state.bufnr, "syntax", "cs")
