@@ -380,7 +380,7 @@ M.StartGetAllTypes = function(searchString)
 end
 
 M.HandleGetAllTypes = function(response)
-	M._openTelescope(response.Body.Implementations, M._createSearchTypesDisplayer)
+	M._openTelescope(response.Body.Implementations, M._createSearchTypesDisplayer, 'Search Types')
 end
 
 M.StartDecompileGotoDefinition = function()
@@ -392,7 +392,7 @@ M.StartFindUsages = function()
 end
 
 M.HandleUsages = function(response)
-	M._openTelescope(response.Body.Implementations, M._createUsagesDisplayer)
+	M._openTelescope(response.Body.Implementations, M._createUsagesDisplayer, 'Find Usages')
 end
 
 M.StartGetDecompiledSource = function(
@@ -421,7 +421,7 @@ M.StartGetTypeMembers = function()
 end
 
 M.HandleGetTypeMembers = function(response)
-	M._openTelescope(response.Body.Implementations, M._createUsagesDisplayer)
+	M._openTelescope(response.Body.Implementations, M._createUsagesDisplayer, 'Type Members')
 end
 
 M.StartFindImplementations = function()
@@ -437,7 +437,7 @@ M.HandleFindImplementations = function(response)
 			M._openSourceFileOrDecompile(response.Body.Implementations[1])
 		end))
 	else
-		M._openTelescope(response.Body.Implementations, M._createUsagesDisplayer)
+		M._openTelescope(response.Body.Implementations, M._createUsagesDisplayer, 'Find Implementations')
 	end
 end
 
@@ -475,14 +475,15 @@ M.HandleDecompileGotoDefinitionResponse = function(response)
 		if response.Request_seq == M._state.CurrentSeq then
 			local timer = vim.loop.new_timer()
 			timer:start(100, 0, vim.schedule_wrap(function()
-				local bufnr = vim.uri_to_bufnr("c:\\TEMP\\DECOMPILED_" .. location.ContainingTypeFullName)
+				local bufnr = vim.uri_to_bufnr("c:\\TEMP\\DECOMPILED_" .. location.ContainingTypeFullName .. ".cs")
 				local lines = {}
 				vim.list_extend(lines, vim.split(fileText, "\r\n"))
 				vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, lines)
 				vim.api.nvim_win_set_buf(0, bufnr)
 				vim.api.nvim_win_set_cursor(0, { line, column })
 				vim.api.nvim_buf_set_option(bufnr, "syntax", "cs")
-				vim.api.nvim_buf_set_option(bufnr, "buftype", "nofile")
+				vim.api.nvim_buf_set_option(bufnr, "filetype", "cs")
+				-- vim.api.nvim_buf_set_option(bufnr, "buftype", "nofile")
 				vim.api.nvim_buf_set_option(bufnr, "buflisted", true)
 				vim.b.IsDecompiled = body.IsDecompiled
 				vim.b.AssemblyFilePath = location.AssemblyFilePath
@@ -504,7 +505,7 @@ M.HandleDecompiledSource = function(response, data)
 	timer:start(100, 0, vim.schedule_wrap(function()
 		if response.Request_seq == M._state.CurrentSeq then
 			if bufnr == 0 then
-				bufnr = vim.uri_to_bufnr("c:\\TEMP\\DECOMPILED_" .. data.Entry.ContainingTypeFullName)
+				bufnr = vim.uri_to_bufnr("c:\\TEMP\\DECOMPILED_" .. data.Entry.ContainingTypeFullName .. ".cs")
 			end
 			local lines = {}
 			vim.list_extend(lines, vim.split(fileText, "\r\n"))
@@ -512,7 +513,8 @@ M.HandleDecompiledSource = function(response, data)
 			vim.api.nvim_win_set_buf(winid, bufnr)
 			vim.api.nvim_win_set_cursor(winid, { line, column })
 			vim.api.nvim_buf_set_option(bufnr, "syntax", "cs")
-			vim.api.nvim_buf_set_option(bufnr, "buftype", "nofile")
+			vim.api.nvim_buf_set_option(bufnr, "filetype", "cs")
+			-- vim.api.nvim_buf_set_option(bufnr, "buftype", "nofile")
 			vim.api.nvim_buf_set_option(bufnr, "buflisted", true)
 			vim.api.nvim_buf_add_highlight(bufnr, -1, "TelescopePreviewLine", line -1, 0, -1)
 			vim.b.IsDecompiled = body.IsDecompiled
@@ -619,32 +621,32 @@ M._createUsagesDisplayer = function(widths)
 			local displayer = entry_display.create {
 				separator = "  ",
 				items = {
-					-- { width = math.min(widths.FileName + 3 + widths.Column + widths.Line, 40) },
+					{ width = widths.ContainingTypeShortName },
 					{ remaining = true },
-					{ width = widths.SourceText },
 				}
 			}
 
 			ordinal = M._blankIfNil(entry.FileName) .. M._blankIfNil(entry.SourceText)
 			make_display = function(entry)
 				return displayer {
-					{ string.format("%s(%s,%s)", entry.value.FileName, entry.value.Line, entry.value.Column), "TelescopeResultsIdentifier" },
-					{ M._blankIfNil(entry.value.SourceText), "TelescopeResultsIdentifier" },
+					{ string.format("%s", entry.value.ContainingTypeShortName), "TelescopeResultsClass" },
+					{ string.format("%s", entry.value.SourceText), "TelescopeResultsIdentifier" },
 				}
 			end
 		else
 			local displayer = entry_display.create {
 				separator = "  ",
 				items = {
-					{ width = math.min(2 + widths.ContainingTypeFullName + 3 + widths.Column + widths.Line, 40) },
+					{ width = widths.ContainingTypeShortName },
 					{ remaining = true },
+					-- { remaining = true },
 				},
 			}
 
 			ordinal = M._blankIfNil(entry.ContainingTypeFullName) .. M._blankIfNil(entry.SourceText)
 			make_display = function(entry)
 				return displayer {
-					{ string.format("$_%s(%s:%s)", entry.value.ContainingTypeFullName, entry.value.Line, entry.value.Column), "TelescopeResultsClass" },
+					{ string.format("%s", entry.value.ContainingTypeShortName), "TelescopeResultsClass" },
 					{ M._blankIfNil(entry.value.SourceText), "TelescopeResultsIdentifier" },
 				}
 			end
@@ -659,9 +661,10 @@ M._createUsagesDisplayer = function(widths)
 	return resultFunc
 end
 
-M._openTelescope = function(data, displayFunc)
+M._openTelescope = function(data, displayFunc, promptTitle)
 	local widths = {
 		ContainingTypeFullName = 0,
+		ContainingTypeShortName = 0,
 		TypeName = 0,
 		NamespaceName = 0,
 		AssemblyName = 0,
@@ -685,16 +688,16 @@ M._openTelescope = function(data, displayFunc)
 
 	local entryMaker = displayFunc(widths)
 
-	opts = opts or {}
+	opts = {}
 	local timer = vim.loop.new_timer()
 	timer:start(1000, 0, vim.schedule_wrap(function()
 	pickers.new(opts, {
 		layout_strategy='vertical',
 		layout_config = {
 			width = 0.95,
-			height = 0.95
+			height = 0.95,
 		},
-		prompt_title = "find implementations",
+		prompt_title = promptTitle,
 		finder = finders.new_table {
 			results = data,
 			entry_maker = entryMaker,
@@ -709,6 +712,15 @@ M._openTelescope = function(data, displayFunc)
 			return true
 		end,
 		previewer = previewers.new_buffer_previewer {
+			dyn_title = function (_, entry)
+				local titleResult = ''
+				if entry.value.Type == 1 then
+					titleResult = vim.fn.fnamemodify(entry.value.FileName, ':.')
+				else
+					titleResult = entry.value.ContainingTypeShortName
+				end
+				return titleResult
+			end,
 			get_buffer_by_name = function(_, entry)
 				return entry.value
 			end,
@@ -718,10 +730,10 @@ M._openTelescope = function(data, displayFunc)
 					local winid = self.state.winid
 
 					conf.buffer_previewer_maker(entry.value.FileName, self.state.bufnr, {
+						use_ft_detect = true,
 						bufname = self.state.bufname,
 						winid = self.state.winid,
 						callback = function(bufnr)
-							vim.fn.setbufvar(bufnr, 'OmniSharp_buf_server', tmp2)
 							local currentWinId = vim.fn.bufwinnr(bufnr)
 							if currentWinId ~= -1 then
 								local startColumn = entry.value.Column
