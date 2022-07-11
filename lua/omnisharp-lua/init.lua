@@ -218,10 +218,7 @@ M.StartOmnisharp = function (solutionPath)
 		-- M._state.SolutionName = vim.fn.expand('%:p:t')
 	end
 	local job = Job:new({
-		-- command = 'H:\\st\\omnisharp\\OmniSharp.exe',
-		command = 'C:\\src\\TryOmnisharpExtension\\StdIoHost\\bin\\Debug\\StdIoHost.exe',
-		-- command = 'C:\\src\\omnisharp-clean\\bin\\Debug\\OmniSharp.Stdio.Driver\\net472\\OmniSharp.exe',
-		-- args = { '--plugin', 'c:\\src\\OmnisharpExtensions\\TryOmnisharpExtension.dll', '-s',  solutionPath },
+		command = 'C:\\src\\csdecompile\\StdIoHost\\bin\\Debug\\StdIoHost.exe',
 		args = {  solutionPath },
 		cwd = '.',
 		on_stdout = on_output,
